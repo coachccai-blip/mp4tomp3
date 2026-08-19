@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Convertisseur MP4 → MP3</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
+<style>
+  :root {
+    --bg: #0f1220;
+    --panel: #181c30;
+    --panel-2: #1f2440;
+    --text: #e8eaf6;
+    --muted: #9aa0c3;
+    --accent: #6c7bff;
+    --accent-2: #22c55e;
+    --danger: #ef4444;
+    --border: #2a3052;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+  .container { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  .subtitle { color: var(--muted); margin-bottom: 1.5rem; font-size: .95rem; }
+
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    background: var(--panel);
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragover { border-color: var(--accent); background: var(--panel-2); }
+  #dropzone .icon { font-size: 2.2rem; display: block; margin-bottom: .5rem; }
+  #dropzone strong { color: var(--accent); }
+  #dropzone p.hint { color: var(--muted); font-size: .85rem; margin-top: .5rem; }
+  #fileInput { display: none; }
+
+  .toolbar {
+    display: flex;
+    gap: .75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 1.25rem 0;
+  }
+  .toolbar .spacer { flex: 1; }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 10px;
+    padding: .65rem 1.2rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: filter .15s, opacity .15s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-success { background: var(--accent-2); color: #06220f; }
+  .btn-ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+
+  select {
+    font: inherit;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .6rem .8rem;
+  }
+  label.qlabel { color: var(--muted); font-size: .9rem; }
+
+  #status { color: var(--muted); font-size: .9rem; margin-bottom: .75rem; min-height: 1.2em; }
+
+  ul#fileList { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+  li.file-item {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: .75rem 1rem;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: .35rem .75rem;
+    align-items: center;
+  }
+  .file-name { font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-meta { color: var(--muted); font-size: .8rem; }
+  .file-actions { display: flex; gap: .5rem; align-items: center; grid-row: span 2; }
+  .file-actions button { padding: .4rem .8rem; font-size: .85rem; }
+  .badge { font-size: .75rem; padding: .2rem .6rem; border-radius: 999px; font-weight: 600; }
+  .badge.waiting { background: var(--panel-2); color: var(--muted); }
+  .badge.converting { background: #3b3164; color: #c4b5fd; }
+  .badge.done { background: #10331d; color: #4ade80; }
+  .badge.error { background: #3a1420; color: #f87171; }
+  .progress {
+    grid-column: 1 / -1;
+    height: 6px;
+    background: var(--panel-2);
+    border-radius: 999px;
+    overflow: hidden;
+    display: none;
+  }
+  .progress.active { display: block; }
+  .progress > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s; }
+
+  footer { margin-top: 2rem; color: var(--muted); font-size: .8rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎵 Convertisseur MP4 → MP3</h1>
+  <p class="subtitle">Déposez jusqu'à 30 fichiers MP4 à la fois. La conversion se fait entièrement dans votre navigateur — aucun fichier n'est envoyé sur internet.</p>
+
+  <div id="dropzone">
+    <span class="icon">📥</span>
+    <div>Glissez-déposez vos fichiers MP4 ici, ou <strong>cliquez pour parcourir</strong></div>
+    <p class="hint">Maximum 30 fichiers par lot · formats vidéo acceptés : .mp4, .m4v, .mov</p>
+  </div>
+  <input type="file" id="fileInput" accept=".mp4,.m4v,.mov,video/mp4,video/quicktime" multiple>
+
+  <div class="toolbar">
+    <label class="qlabel" for="quality">Qualité :</label>
+    <select id="quality">
+      <option value="2" selected>Haute (~190 kbit/s)</option>
+      <option value="4">Moyenne (~165 kbit/s)</option>
+      <option value="6">Basse (~130 kbit/s)</option>
+    </select>
+    <span class="spacer"></span>
+    <button id="clearBtn" class="btn-ghost" disabled>Vider la liste</button>
+    <button id="convertBtn" class="btn-primary" disabled>Convertir en MP3</button>
+    <button id="zipBtn" class="btn-success" disabled>Tout télécharger (ZIP)</button>
+  </div>
+
+  <div id="status"></div>
+  <ul id="fileList"></ul>
+
+  <footer>Propulsé par ffmpeg.wasm · Les fichiers restent sur votre machine.</footer>
+</div>
+
+<script src="vendor/ffmpeg.js"></script>
+<script src="vendor/ffmpeg-util.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script>
+const MAX_FILES = 30;
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const fileList = document.getElementById("fileList");
+const convertBtn = document.getElementById("convertBtn");
+const zipBtn = document.getElementById("zipBtn");
+const clearBtn = document.getElementById("clearBtn");
+const qualitySelect = document.getElementById("quality");
+const statusEl = document.getElementById("status");
+
+/** @type {{file: File, status: string, mp3Blob: Blob|null, li: HTMLElement}[]} */
+let queue = [];
+let ffmpeg = null;
+let converting = false;
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+function humanSize(bytes) {
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " Ko";
+  return (bytes / (1024 * 1024)).toFixed(1) + " Mo";
+}
+
+function mp3Name(name) { return name.replace(/\.[^.]+$/, "") + ".mp3"; }
+
+function refreshButtons() {
+  const hasFiles = queue.length > 0;
+  const hasPending = queue.some(e => e.status === "waiting" || e.status === "error");
+  const doneCount = queue.filter(e => e.status === "done").length;
+  convertBtn.disabled = converting || !hasPending;
+  clearBtn.disabled = converting || !hasFiles;
+  zipBtn.disabled = converting || doneCount === 0;
+  zipBtn.textContent = doneCount > 0 ? `Tout télécharger (ZIP) — ${doneCount}` : "Tout télécharger (ZIP)";
+}
+
+function setBadge(entry, status, label) {
+  entry.status = status;
+  const badge = entry.li.querySelector(".badge");
+  badge.className = "badge " + status;
+  badge.textContent = label;
+}
+
+function addFiles(files) {
+  if (converting) return;
+  const videos = [...files].filter(f =>
+    /\.(mp4|m4v|mov)$/i.test(f.name) || f.type.startsWith("video/")
+  );
+  const skipped = files.length - videos.length;
+  const room = MAX_FILES - queue.length;
+  const accepted = videos.slice(0, room);
+
+  for (const file of accepted) {
+    const li = document.createElement("li");
+    li.className = "file-item";
+    li.innerHTML = `
+      <div class="file-name" title="${file.name}">${file.name}</div>
+      <div class="file-actions">
+        <span class="badge waiting">En attente</span>
+        <button class="btn-success dl-btn" style="display:none">Télécharger</button>
+        <button class="btn-ghost rm-btn">✕</button>
+      </div>
+      <div class="file-meta">${humanSize(file.size)} → ${mp3Name(file.name)}</div>
+      <div class="progress"><div></div></div>`;
+    const entry = { file, status: "waiting", mp3Blob: null, li };
+    li.querySelector(".rm-btn").addEventListener("click", () => {
+      if (converting) return;
+      queue = queue.filter(e => e !== entry);
+      li.remove();
+      refreshButtons();
+      setStatus(queue.length ? `${queue.length}/${MAX_FILES} fichier(s) dans la liste.` : "");
+    });
+    li.querySelector(".dl-btn").addEventListener("click", () => downloadEntry(entry));
+    fileList.appendChild(li);
+    queue.push(entry);
+  }
+
+  let msg = `${queue.length}/${MAX_FILES} fichier(s) dans la liste.`;
+  if (videos.length > room) msg += ` ${videos.length - room} fichier(s) refusé(s) : limite de ${MAX_FILES} par lot atteinte.`;
+  if (skipped > 0) msg += ` ${skipped} fichier(s) ignoré(s) (pas des vidéos).`;
+  setStatus(msg);
+  refreshButtons();
+}
+
+function downloadEntry(entry) {
+  if (!entry.mp3Blob) return;
+  const url = URL.createObjectURL(entry.mp3Blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = mp3Name(entry.file.name);
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function loadFFmpeg() {
+  if (ffmpeg) return ffmpeg;
+  setStatus("Chargement du moteur de conversion…");
+  const { FFmpeg } = FFmpegWASM;
+  ffmpeg = new FFmpeg();
+  await ffmpeg.load({
+    coreURL: new URL("vendor/ffmpeg-core.js", location.href).href,
+    wasmURL: new URL("vendor/ffmpeg-core.wasm", location.href).href,
+  });
+  return ffmpeg;
+}
+
+async function convertAll() {
+  if (converting) return;
+  converting = true;
+  refreshButtons();
+  fileInput.disabled = true;
+
+  try {
+    const ff = await loadFFmpeg();
+    const { fetchFile } = FFmpegUtil;
+    const quality = qualitySelect.value;
+    const pending = queue.filter(e => e.status === "waiting" || e.status === "error");
+    let done = 0;
+
+    for (const entry of pending) {
+      const progressBar = entry.li.querySelector(".progress");
+      const progressFill = progressBar.querySelector("div");
+      setBadge(entry, "converting", "Conversion…");
+      progressBar.classList.add("active");
+      setStatus(`Conversion ${done + 1}/${pending.length} : ${entry.file.name}`);
+
+      const onProgress = ({ progress }) => {
+        progressFill.style.width = Math.min(100, Math.round(progress * 100)) + "%";
+      };
+      ff.on("progress", onProgress);
+
+      const inName = "in_" + Date.now() + ".mp4";
+      const outName = "out_" + Date.now() + ".mp3";
+      try {
+        await ff.writeFile(inName, await fetchFile(entry.file));
+        const code = await ff.exec([
+          "-i", inName,
+          "-vn",
+          "-acodec", "libmp3lame",
+          "-q:a", quality,
+          outName,
+        ]);
+        if (code !== 0) throw new Error("ffmpeg a retourné le code " + code);
+        const data = await ff.readFile(outName);
+        entry.mp3Blob = new Blob([data.buffer], { type: "audio/mpeg" });
+        setBadge(entry, "done", "Terminé ✓");
+        entry.li.querySelector(".dl-btn").style.display = "";
+        entry.li.querySelector(".file-meta").textContent =
+          `${humanSize(entry.file.size)} → ${mp3Name(entry.file.name)} (${humanSize(entry.mp3Blob.size)})`;
+        done++;
+      } catch (err) {
+        console.error("Erreur de conversion pour", entry.file.name, err);
+        setBadge(entry, "error", "Erreur — réessayer");
+      } finally {
+        ff.off("progress", onProgress);
+        progressBar.classList.remove("active");
+        progressFill.style.width = "0%";
+        try { await ff.deleteFile(inName); } catch (_) {}
+        try { await ff.deleteFile(outName); } catch (_) {}
+      }
+    }
+
+    const errors = pending.length - done;
+    setStatus(
+      `Terminé : ${done} fichier(s) converti(s)` +
+      (errors ? `, ${errors} en erreur (cliquez sur « Convertir » pour réessayer).` : ".")
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus("Erreur : impossible de charger le moteur de conversion. Servez l'application via un serveur web (voir README) puis rechargez la page.");
+  } finally {
+    converting = false;
+    fileInput.disabled = false;
+    refreshButtons();
+  }
+}
+
+async function downloadZip() {
+  const doneEntries = queue.filter(e => e.status === "done" && e.mp3Blob);
+  if (!doneEntries.length) return;
+  setStatus("Création du ZIP…");
+  const zip = new JSZip();
+  const used = new Set();
+  for (const entry of doneEntries) {
+    let name = mp3Name(entry.file.name);
+    let i = 1;
+    while (used.has(name)) name = mp3Name(entry.file.name).replace(/\.mp3$/, ` (${i++}).mp3`);
+    used.add(name);
+    zip.file(name, entry.mp3Blob);
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "conversion_mp3.zip";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  setStatus(`ZIP téléchargé : ${doneEntries.length} fichier(s) MP3.`);
+}
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  addFiles([...e.dataTransfer.files]);
+});
+fileInput.addEventListener("change", () => {
+  addFiles([...fileInput.files]);
+  fileInput.value = "";
+});
+convertBtn.addEventListener("click", convertAll);
+zipBtn.addEventListener("click", downloadZip);
+clearBtn.addEventListener("click", () => {
+  if (converting) return;
+  queue = [];
+  fileList.innerHTML = "";
+  setStatus("");
+  refreshButtons();
+});
+</script>
+</body>
+</html>
