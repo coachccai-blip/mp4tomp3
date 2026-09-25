@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Convertisseur MP4 → MP3</title>
+<title>Studio Audio — Conversion & Nettoyage</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
 <style>
   :root {
@@ -16,6 +16,26 @@
     --accent-2: #22c55e;
     --danger: #ef4444;
     --border: #2a3052;
+    --wave-before: #4a5178;
+    --wave-after: #8b96ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f2f4fb;
+      --panel: #ffffff;
+      --panel-2: #e9ecf7;
+      --text: #1b1e33;
+      --muted: #5b6183;
+      --accent: #4756e0;
+      --accent-2: #199a4c;
+      --danger: #dc2626;
+      --border: #d5daee;
+      --wave-before: #c3c9e5;
+      --wave-after: #4756e0;
+    }
+    .badge.done { background: #d9f5e3; color: #0f7a37; }
+    .badge.error { background: #fde3e3; color: #b91c1c; }
+    .badge.converting { background: #e4e0fb; color: #4c3fb8; }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -27,9 +47,34 @@
   }
   .container { max-width: 860px; margin: 0 auto; }
   h1 { font-size: 1.6rem; margin-bottom: .25rem; }
-  .subtitle { color: var(--muted); margin-bottom: 1.5rem; font-size: .95rem; }
+  .subtitle { color: var(--muted); margin-bottom: 1.25rem; font-size: .95rem; }
 
-  #dropzone {
+  .tabs {
+    display: flex;
+    gap: .5rem;
+    margin: 1.25rem 0 1.5rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+  }
+  .tabs button {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 8px 8px 0 0;
+    padding: .7rem 1.1rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tabs button:hover { color: var(--text); background: var(--panel); }
+  .tabs button[aria-selected="true"] {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+    background: var(--panel);
+  }
+
+  .dropzone {
     border: 2px dashed var(--border);
     border-radius: 14px;
     background: var(--panel);
@@ -38,11 +83,11 @@
     cursor: pointer;
     transition: border-color .15s, background .15s;
   }
-  #dropzone.dragover { border-color: var(--accent); background: var(--panel-2); }
-  #dropzone .icon { font-size: 2.2rem; display: block; margin-bottom: .5rem; }
-  #dropzone strong { color: var(--accent); }
-  #dropzone p.hint { color: var(--muted); font-size: .85rem; margin-top: .5rem; }
-  #fileInput { display: none; }
+  .dropzone.dragover, .dropzone:focus-visible { border-color: var(--accent); background: var(--panel-2); outline: none; }
+  .dropzone .icon { font-size: 2.2rem; display: block; margin-bottom: .5rem; }
+  .dropzone strong { color: var(--accent); }
+  .dropzone p.hint { color: var(--muted); font-size: .85rem; margin-top: .5rem; }
+  input[type="file"] { display: none; }
 
   .toolbar {
     display: flex;
@@ -60,26 +105,73 @@
     cursor: pointer;
     font-weight: 600;
     transition: filter .15s, opacity .15s;
+    color: var(--text);
   }
-  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button:hover:not(:disabled) { filter: brightness(1.12); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   .btn-primary { background: var(--accent); color: white; }
   .btn-success { background: var(--accent-2); color: #06220f; }
+  .btn-danger { background: var(--danger); color: white; }
   .btn-ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
 
-  select {
+  select, input[type="password"], input[type="text"] {
     font: inherit;
     background: var(--panel-2);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: .6rem .8rem;
+    padding: .55rem .8rem;
+    max-width: 100%;
   }
-  label.qlabel { color: var(--muted); font-size: .9rem; }
+  .status { color: var(--muted); font-size: .9rem; margin-bottom: .75rem; min-height: 1.2em; }
 
-  #status { color: var(--muted); font-size: .9rem; margin-bottom: .75rem; min-height: 1.2em; }
+  .settings {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: .9rem 1.25rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.1rem 1.25rem;
+    margin-top: 1.25rem;
+  }
+  .setting { display: flex; flex-direction: column; gap: .4rem; }
+  .setting > label { font-size: .85rem; color: var(--muted); font-weight: 600; }
+  .setting output { color: var(--text); font-weight: 700; float: right; }
+  .setting.checkline { flex-direction: row; align-items: center; gap: .6rem; }
+  .setting.checkline label { color: var(--text); font-weight: 500; font-size: .92rem; cursor: pointer; }
+  input[type="range"] { accent-color: var(--accent); width: 100%; }
+  input[type="checkbox"] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; }
 
-  ul#fileList { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+  details.advanced {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: .9rem 1.25rem;
+    margin-top: .9rem;
+  }
+  details.advanced summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.advanced[open] summary { color: var(--text); margin-bottom: .75rem; }
+  .warn {
+    background: rgba(239, 68, 68, .12);
+    border: 1px solid rgba(239, 68, 68, .35);
+    color: var(--text);
+    border-radius: 10px;
+    padding: .7rem .9rem;
+    font-size: .85rem;
+    margin: .6rem 0;
+  }
+  .privacy {
+    margin-top: 1rem;
+    font-size: .82rem;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .55rem .9rem;
+  }
+
+  ul.file-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
   li.file-item {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -94,7 +186,7 @@
   .file-meta { color: var(--muted); font-size: .8rem; }
   .file-actions { display: flex; gap: .5rem; align-items: center; grid-row: span 2; }
   .file-actions button { padding: .4rem .8rem; font-size: .85rem; }
-  .badge { font-size: .75rem; padding: .2rem .6rem; border-radius: 999px; font-weight: 600; }
+  .badge { font-size: .75rem; padding: .2rem .6rem; border-radius: 999px; font-weight: 600; white-space: nowrap; }
   .badge.waiting { background: var(--panel-2); color: var(--muted); }
   .badge.converting { background: #3b3164; color: #c4b5fd; }
   .badge.done { background: #10331d; color: #4ade80; }
@@ -108,266 +200,156 @@
     display: none;
   }
   .progress.active { display: block; }
+  .progress.indeterminate > div { width: 30% !important; animation: slide 1.1s linear infinite; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
   .progress > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s; }
+
+  canvas.wave {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: 52px;
+    background: var(--panel-2);
+    border-radius: 8px;
+  }
+  .ab-player {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+  }
+  .ab-player .play-btn { padding: .35rem .7rem; }
+  .ab-player .ab-btn { padding: .35rem .7rem; font-size: .8rem; min-width: 6.2rem; }
+  .ab-player input[type="range"] { flex: 1; }
+  .ab-player .time { color: var(--muted); font-size: .8rem; min-width: 6.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .levels { grid-column: 1 / -1; }
 
   footer { margin-top: 2rem; color: var(--muted); font-size: .8rem; text-align: center; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>🎵 Convertisseur MP4 → MP3</h1>
-  <p class="subtitle">Déposez jusqu'à 30 fichiers MP4 à la fois. La conversion se fait entièrement dans votre navigateur — aucun fichier n'est envoyé sur internet.</p>
+  <h1>🎵 Studio Audio</h1>
+  <nav class="tabs" role="tablist" aria-label="Outils">
+    <button id="tabbtn-convert" role="tab" aria-selected="true" aria-controls="tab-convert">🎬 MP4 → MP3</button>
+    <button id="tabbtn-clean" role="tab" aria-selected="false" aria-controls="tab-clean">🎙️ Nettoyage audio</button>
+  </nav>
 
-  <div id="dropzone">
-    <span class="icon">📥</span>
-    <div>Glissez-déposez vos fichiers MP4 ici, ou <strong>cliquez pour parcourir</strong></div>
-    <p class="hint">Maximum 30 fichiers par lot · formats vidéo acceptés : .mp4, .m4v, .mov</p>
-  </div>
-  <input type="file" id="fileInput" accept=".mp4,.m4v,.mov,video/mp4,video/quicktime" multiple>
+  <!-- ===================== Onglet 1 : MP4 → MP3 ===================== -->
+  <section id="tab-convert" role="tabpanel" aria-labelledby="tabbtn-convert">
+    <p class="subtitle">Déposez jusqu'à 30 fichiers MP4 à la fois. La conversion se fait entièrement dans votre navigateur — aucun fichier n'est envoyé sur internet.</p>
 
-  <div class="toolbar">
-    <label class="qlabel" for="quality">Qualité :</label>
-    <select id="quality">
-      <option value="2" selected>Haute (~190 kbit/s)</option>
-      <option value="4">Moyenne (~165 kbit/s)</option>
-      <option value="6">Basse (~130 kbit/s)</option>
-    </select>
-    <span class="spacer"></span>
-    <button id="clearBtn" class="btn-ghost" disabled>Vider la liste</button>
-    <button id="convertBtn" class="btn-primary" disabled>Convertir en MP3</button>
-    <button id="zipBtn" class="btn-success" disabled>Tout télécharger (ZIP)</button>
-  </div>
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Ajouter des fichiers vidéo à convertir">
+      <span class="icon">📥</span>
+      <div>Glissez-déposez vos fichiers MP4 ici, ou <strong>cliquez pour parcourir</strong></div>
+      <p class="hint">Maximum 30 fichiers par lot · formats vidéo acceptés : .mp4, .m4v, .mov</p>
+    </div>
+    <input type="file" id="fileInput" accept=".mp4,.m4v,.mov,video/mp4,video/quicktime" multiple>
 
-  <div id="status"></div>
-  <ul id="fileList"></ul>
+    <div class="toolbar">
+      <label class="setting" style="flex-direction:row;align-items:center;gap:.5rem">
+        <span style="color:var(--muted);font-size:.9rem">Qualité :</span>
+        <select id="quality">
+          <option value="2" selected>Haute (~190 kbit/s)</option>
+          <option value="4">Moyenne (~165 kbit/s)</option>
+          <option value="6">Basse (~130 kbit/s)</option>
+        </select>
+      </label>
+      <span class="spacer"></span>
+      <button id="clearBtn" class="btn-ghost" disabled>Vider la liste</button>
+      <button id="convertBtn" class="btn-primary" disabled>Convertir en MP3</button>
+      <button id="zipBtn" class="btn-success" disabled>Tout télécharger (ZIP)</button>
+    </div>
 
-  <footer>Propulsé par ffmpeg.wasm · Les fichiers restent sur votre machine.</footer>
+    <div id="status" class="status" role="status"></div>
+    <ul id="fileList" class="file-list"></ul>
+  </section>
+
+  <!-- ===================== Onglet 2 : Nettoyage audio ===================== -->
+  <section id="tab-clean" role="tabpanel" aria-labelledby="tabbtn-clean" hidden>
+    <p class="subtitle">Supprimez le bruit de fond de vos enregistrements (voix, podcast, interview…), ajustez le niveau, écoutez avant/après puis téléchargez. Tout se passe dans votre navigateur.</p>
+
+    <div id="dropzoneClean" class="dropzone" tabindex="0" role="button" aria-label="Ajouter des fichiers audio à nettoyer">
+      <span class="icon">🎚️</span>
+      <div>Glissez-déposez vos fichiers audio ici, ou <strong>cliquez pour parcourir</strong></div>
+      <p class="hint">Maximum 30 fichiers par lot · WAV, MP3, M4A/AAC, OGG, FLAC, WebM… (les vidéos MP4 sont acceptées : seul l'audio est traité)</p>
+    </div>
+    <input type="file" id="fileInputClean" multiple
+           accept=".wav,.mp3,.m4a,.aac,.ogg,.oga,.flac,.webm,.mp4,.m4v,.mov,.wma,.opus,audio/*,video/mp4,video/quicktime,video/webm">
+
+    <div class="settings" aria-label="Réglages de nettoyage">
+      <div class="setting">
+        <label for="clPreset">Préréglage de débruitage</label>
+        <select id="clPreset">
+          <option value="leger">Léger — souffle discret</option>
+          <option value="standard" selected>Standard — bruit de fond courant</option>
+          <option value="fort">Fort — bruit important</option>
+          <option value="voix">Isolation voix — tout retirer sauf la parole (RNNoise)</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="clIntensity">Intensité (mélange original/traité) <output id="clIntensityOut">85 %</output></label>
+        <input type="range" id="clIntensity" min="0" max="100" value="85" step="5">
+      </div>
+      <div class="setting">
+        <label for="clGain">Gain <output id="clGainOut">0 dB</output></label>
+        <input type="range" id="clGain" min="-12" max="24" value="0" step="1">
+      </div>
+      <div class="setting">
+        <label for="clNorm">Normalisation du niveau</label>
+        <select id="clNorm">
+          <option value="none" selected>Aucune (limiteur seul)</option>
+          <option value="peak">Crête −1 dB</option>
+          <option value="lufs16">Sonie −16 LUFS (podcast)</option>
+          <option value="lufs14">Sonie −14 LUFS (YouTube / Spotify)</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="clFormat">Format de sortie</label>
+        <select id="clFormat">
+          <option value="mp3" selected>MP3 (~190 kbit/s)</option>
+          <option value="wav16">WAV 16 bits</option>
+          <option value="wav24">WAV 24 bits</option>
+        </select>
+      </div>
+      <div class="setting checkline">
+        <input type="checkbox" id="clTrim">
+        <label for="clTrim">Couper le silence en début et fin</label>
+      </div>
+    </div>
+
+    <details class="advanced" id="elDetails">
+      <summary>Mode « qualité maximale » via l'API ElevenLabs (optionnel)</summary>
+      <div class="warn">⚠️ Dans ce mode, vos fichiers sont <strong>envoyés aux serveurs d'ElevenLabs</strong> et votre clé API est utilisée depuis ce navigateur. La clé est enregistrée uniquement dans le stockage local de votre navigateur, jamais dans le code ni sur un serveur tiers. Ce mode nécessite un compte ElevenLabs avec du crédit.</div>
+      <div class="setting checkline" style="margin-bottom:.6rem">
+        <input type="checkbox" id="elEnable">
+        <label for="elEnable">Utiliser l'isolation vocale ElevenLabs à la place du moteur local</label>
+      </div>
+      <div class="setting">
+        <label for="elKey">Clé API ElevenLabs</label>
+        <input type="password" id="elKey" placeholder="xi-api-key…" autocomplete="off">
+      </div>
+    </details>
+
+    <div class="toolbar">
+      <button id="clClearBtn" class="btn-ghost" disabled>Vider la liste</button>
+      <span class="spacer"></span>
+      <button id="clCancelBtn" class="btn-danger" hidden>Annuler</button>
+      <button id="clCleanBtn" class="btn-primary" disabled>Nettoyer les fichiers</button>
+      <button id="clZipBtn" class="btn-success" disabled>Tout télécharger (ZIP)</button>
+    </div>
+
+    <div id="clStatus" class="status" role="status"></div>
+    <ul id="clFileList" class="file-list"></ul>
+
+    <p class="privacy">🔒 Vos fichiers sont traités en local et ne quittent jamais votre machine — sauf si vous activez explicitement le mode ElevenLabs ci-dessus. Vérifiable dans l'onglet « Réseau » des outils de développement.</p>
+  </section>
+
+  <footer>Propulsé par ffmpeg.wasm (LGPL) et le modèle RNNoise « beguiling-drafter » (domaine public) · Fonctionne hors-ligne après le premier chargement.</footer>
 </div>
 
 <script src="vendor/ffmpeg.js"></script>
 <script src="vendor/ffmpeg-util.js"></script>
 <script src="vendor/jszip.min.js"></script>
-<script>
-const MAX_FILES = 30;
-
-const dropzone = document.getElementById("dropzone");
-const fileInput = document.getElementById("fileInput");
-const fileList = document.getElementById("fileList");
-const convertBtn = document.getElementById("convertBtn");
-const zipBtn = document.getElementById("zipBtn");
-const clearBtn = document.getElementById("clearBtn");
-const qualitySelect = document.getElementById("quality");
-const statusEl = document.getElementById("status");
-
-/** @type {{file: File, status: string, mp3Blob: Blob|null, li: HTMLElement}[]} */
-let queue = [];
-let ffmpeg = null;
-let converting = false;
-
-function setStatus(msg) { statusEl.textContent = msg; }
-
-function humanSize(bytes) {
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " Ko";
-  return (bytes / (1024 * 1024)).toFixed(1) + " Mo";
-}
-
-function mp3Name(name) { return name.replace(/\.[^.]+$/, "") + ".mp3"; }
-
-function refreshButtons() {
-  const hasFiles = queue.length > 0;
-  const hasPending = queue.some(e => e.status === "waiting" || e.status === "error");
-  const doneCount = queue.filter(e => e.status === "done").length;
-  convertBtn.disabled = converting || !hasPending;
-  clearBtn.disabled = converting || !hasFiles;
-  zipBtn.disabled = converting || doneCount === 0;
-  zipBtn.textContent = doneCount > 0 ? `Tout télécharger (ZIP) — ${doneCount}` : "Tout télécharger (ZIP)";
-}
-
-function setBadge(entry, status, label) {
-  entry.status = status;
-  const badge = entry.li.querySelector(".badge");
-  badge.className = "badge " + status;
-  badge.textContent = label;
-}
-
-function addFiles(files) {
-  if (converting) return;
-  const videos = [...files].filter(f =>
-    /\.(mp4|m4v|mov)$/i.test(f.name) || f.type.startsWith("video/")
-  );
-  const skipped = files.length - videos.length;
-  const room = MAX_FILES - queue.length;
-  const accepted = videos.slice(0, room);
-
-  for (const file of accepted) {
-    const li = document.createElement("li");
-    li.className = "file-item";
-    li.innerHTML = `
-      <div class="file-name" title="${file.name}">${file.name}</div>
-      <div class="file-actions">
-        <span class="badge waiting">En attente</span>
-        <button class="btn-success dl-btn" style="display:none">Télécharger</button>
-        <button class="btn-ghost rm-btn">✕</button>
-      </div>
-      <div class="file-meta">${humanSize(file.size)} → ${mp3Name(file.name)}</div>
-      <div class="progress"><div></div></div>`;
-    const entry = { file, status: "waiting", mp3Blob: null, li };
-    li.querySelector(".rm-btn").addEventListener("click", () => {
-      if (converting) return;
-      queue = queue.filter(e => e !== entry);
-      li.remove();
-      refreshButtons();
-      setStatus(queue.length ? `${queue.length}/${MAX_FILES} fichier(s) dans la liste.` : "");
-    });
-    li.querySelector(".dl-btn").addEventListener("click", () => downloadEntry(entry));
-    fileList.appendChild(li);
-    queue.push(entry);
-  }
-
-  let msg = `${queue.length}/${MAX_FILES} fichier(s) dans la liste.`;
-  if (videos.length > room) msg += ` ${videos.length - room} fichier(s) refusé(s) : limite de ${MAX_FILES} par lot atteinte.`;
-  if (skipped > 0) msg += ` ${skipped} fichier(s) ignoré(s) (pas des vidéos).`;
-  setStatus(msg);
-  refreshButtons();
-}
-
-function downloadEntry(entry) {
-  if (!entry.mp3Blob) return;
-  const url = URL.createObjectURL(entry.mp3Blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = mp3Name(entry.file.name);
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-}
-
-async function loadFFmpeg() {
-  if (ffmpeg) return ffmpeg;
-  setStatus("Chargement du moteur de conversion…");
-  const { FFmpeg } = FFmpegWASM;
-  ffmpeg = new FFmpeg();
-  await ffmpeg.load({
-    coreURL: new URL("vendor/ffmpeg-core.js", location.href).href,
-    wasmURL: new URL("vendor/ffmpeg-core.wasm", location.href).href,
-  });
-  return ffmpeg;
-}
-
-async function convertAll() {
-  if (converting) return;
-  converting = true;
-  refreshButtons();
-  fileInput.disabled = true;
-
-  try {
-    const ff = await loadFFmpeg();
-    const { fetchFile } = FFmpegUtil;
-    const quality = qualitySelect.value;
-    const pending = queue.filter(e => e.status === "waiting" || e.status === "error");
-    let done = 0;
-
-    for (const entry of pending) {
-      const progressBar = entry.li.querySelector(".progress");
-      const progressFill = progressBar.querySelector("div");
-      setBadge(entry, "converting", "Conversion…");
-      progressBar.classList.add("active");
-      setStatus(`Conversion ${done + 1}/${pending.length} : ${entry.file.name}`);
-
-      const onProgress = ({ progress }) => {
-        progressFill.style.width = Math.min(100, Math.round(progress * 100)) + "%";
-      };
-      ff.on("progress", onProgress);
-
-      const inName = "in_" + Date.now() + ".mp4";
-      const outName = "out_" + Date.now() + ".mp3";
-      try {
-        await ff.writeFile(inName, await fetchFile(entry.file));
-        const code = await ff.exec([
-          "-i", inName,
-          "-vn",
-          "-acodec", "libmp3lame",
-          "-q:a", quality,
-          outName,
-        ]);
-        if (code !== 0) throw new Error("ffmpeg a retourné le code " + code);
-        const data = await ff.readFile(outName);
-        entry.mp3Blob = new Blob([data.buffer], { type: "audio/mpeg" });
-        setBadge(entry, "done", "Terminé ✓");
-        entry.li.querySelector(".dl-btn").style.display = "";
-        entry.li.querySelector(".file-meta").textContent =
-          `${humanSize(entry.file.size)} → ${mp3Name(entry.file.name)} (${humanSize(entry.mp3Blob.size)})`;
-        done++;
-      } catch (err) {
-        console.error("Erreur de conversion pour", entry.file.name, err);
-        setBadge(entry, "error", "Erreur — réessayer");
-      } finally {
-        ff.off("progress", onProgress);
-        progressBar.classList.remove("active");
-        progressFill.style.width = "0%";
-        try { await ff.deleteFile(inName); } catch (_) {}
-        try { await ff.deleteFile(outName); } catch (_) {}
-      }
-    }
-
-    const errors = pending.length - done;
-    setStatus(
-      `Terminé : ${done} fichier(s) converti(s)` +
-      (errors ? `, ${errors} en erreur (cliquez sur « Convertir » pour réessayer).` : ".")
-    );
-  } catch (err) {
-    console.error(err);
-    setStatus("Erreur : impossible de charger le moteur de conversion. Servez l'application via un serveur web (voir README) puis rechargez la page.");
-  } finally {
-    converting = false;
-    fileInput.disabled = false;
-    refreshButtons();
-  }
-}
-
-async function downloadZip() {
-  const doneEntries = queue.filter(e => e.status === "done" && e.mp3Blob);
-  if (!doneEntries.length) return;
-  setStatus("Création du ZIP…");
-  const zip = new JSZip();
-  const used = new Set();
-  for (const entry of doneEntries) {
-    let name = mp3Name(entry.file.name);
-    let i = 1;
-    while (used.has(name)) name = mp3Name(entry.file.name).replace(/\.mp3$/, ` (${i++}).mp3`);
-    used.add(name);
-    zip.file(name, entry.mp3Blob);
-  }
-  const blob = await zip.generateAsync({ type: "blob" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "conversion_mp3.zip";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-  setStatus(`ZIP téléchargé : ${doneEntries.length} fichier(s) MP3.`);
-}
-
-dropzone.addEventListener("click", () => fileInput.click());
-dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("dragover"); });
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
-dropzone.addEventListener("drop", e => {
-  e.preventDefault();
-  dropzone.classList.remove("dragover");
-  addFiles([...e.dataTransfer.files]);
-});
-fileInput.addEventListener("change", () => {
-  addFiles([...fileInput.files]);
-  fileInput.value = "";
-});
-convertBtn.addEventListener("click", convertAll);
-zipBtn.addEventListener("click", downloadZip);
-clearBtn.addEventListener("click", () => {
-  if (converting) return;
-  queue = [];
-  fileList.innerHTML = "";
-  setStatus("");
-  refreshButtons();
-});
-</script>
+<script src="js/app.js"></script>
 </body>
 </html>
