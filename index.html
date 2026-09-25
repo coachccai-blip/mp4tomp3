@@ -211,6 +211,8 @@
     background: var(--panel-2);
     border-radius: 8px;
   }
+  canvas.wave.selectable { cursor: crosshair; touch-action: none; }
+  .noise-hint { grid-column: 1 / -1; color: var(--accent); }
   .ab-player {
     grid-column: 1 / -1;
     display: flex;
@@ -280,15 +282,20 @@
       <div class="setting">
         <label for="clPreset">Préréglage de débruitage</label>
         <select id="clPreset">
+          <option value="profil" selected>Profil de bruit — sélectionner le bruit (méthode Audacity)</option>
           <option value="leger">Léger — souffle discret</option>
-          <option value="standard" selected>Standard — bruit de fond courant</option>
+          <option value="standard">Standard — bruit de fond courant</option>
           <option value="fort">Fort — bruit important</option>
           <option value="voix">Isolation voix — tout retirer sauf la parole (RNNoise)</option>
         </select>
       </div>
+      <div class="setting" id="clReductionWrap">
+        <label for="clReduction">Réduction de bruit <output id="clReductionOut">18 dB</output></label>
+        <input type="range" id="clReduction" min="3" max="48" value="18" step="3">
+      </div>
       <div class="setting">
-        <label for="clIntensity">Intensité (mélange original/traité) <output id="clIntensityOut">85 %</output></label>
-        <input type="range" id="clIntensity" min="0" max="100" value="85" step="5">
+        <label for="clIntensity">Intensité (mélange original/traité) <output id="clIntensityOut">100 %</output></label>
+        <input type="range" id="clIntensity" min="0" max="100" value="100" step="5">
       </div>
       <div class="setting">
         <label for="clGain">Gain <output id="clGainOut">0 dB</output></label>

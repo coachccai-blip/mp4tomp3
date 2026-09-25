@@ -297,6 +297,9 @@ if (location.hash === "#nettoyage") selectTab(1);
   const clearBtn = document.getElementById("clClearBtn");
   const statusEl = document.getElementById("clStatus");
   const presetSel = document.getElementById("clPreset");
+  const reductionWrap = document.getElementById("clReductionWrap");
+  const reductionInput = document.getElementById("clReduction");
+  const reductionOut = document.getElementById("clReductionOut");
   const intensityInput = document.getElementById("clIntensity");
   const intensityOut = document.getElementById("clIntensityOut");
   const gainInput = document.getElementById("clGain");
@@ -318,12 +321,14 @@ if (location.hash === "#nettoyage") selectTab(1);
     try { localStorage.setItem("elevenlabs_api_key", elKey.value.trim()); } catch (_) {}
   });
 
-  const PRESET_INTENSITY = { leger: 60, standard: 85, fort: 100, voix: 100 };
+  const PRESET_INTENSITY = { profil: 100, leger: 60, standard: 85, fort: 100, voix: 100 };
   presetSel.addEventListener("change", () => {
     intensityInput.value = PRESET_INTENSITY[presetSel.value];
     intensityInput.dispatchEvent(new Event("input"));
+    refreshNoiseUI();
   });
   intensityInput.addEventListener("input", () => { intensityOut.textContent = intensityInput.value + " %"; });
+  reductionInput.addEventListener("input", () => { reductionOut.textContent = reductionInput.value + " dB"; });
   gainInput.addEventListener("input", () => {
     gainOut.textContent = (gainInput.value > 0 ? "+" : "") + gainInput.value + " dB";
   });
@@ -382,6 +387,7 @@ if (location.hash === "#nettoyage") selectTab(1);
         <div class="file-meta">${humanSize(file.size)}</div>
         <div class="progress"><div></div></div>
         <canvas class="wave" hidden aria-label="Forme d'onde avant/après"></canvas>
+        <div class="noise-hint file-meta" hidden></div>
         <div class="ab-player" hidden>
           <button class="btn-ghost play-btn" aria-label="Lecture / pause">▶</button>
           <button class="btn-primary ab-btn" aria-pressed="true" title="Basculer entre l'original et la version nettoyée">Nettoyé</button>
@@ -389,7 +395,12 @@ if (location.hash === "#nettoyage") selectTab(1);
           <span class="time">0:00 / 0:00</span>
         </div>
         <div class="levels file-meta"></div>`;
-      const entry = { file, status: "waiting", cleanBlob: null, li, player: null, origUrl: null, cleanUrl: null, peakBefore: null };
+      const entry = {
+        file, status: "waiting", cleanBlob: null, li, player: null,
+        origUrl: null, cleanUrl: null, peakBefore: null,
+        peaksBefore: null, peaksAfter: null, duration: null,
+        noiseSel: null, decodeFailed: false,
+      };
       li.querySelector(".rm-btn").addEventListener("click", () => {
         if (processing) return;
         releaseEntry(entry);
@@ -403,6 +414,8 @@ if (location.hash === "#nettoyage") selectTab(1);
       });
       fileList.appendChild(li);
       queue.push(entry);
+      attachWaveSelection(entry);
+      analyzeEntry(entry); // asynchrone : forme d'onde + détection de la zone de bruit
     }
 
     let msg = `${queue.length}/${MAX_FILES} fichier(s) dans la liste.`;
@@ -423,11 +436,35 @@ if (location.hash === "#nettoyage") selectTab(1);
     }
   }
 
+  /* Sous-graphe « méthode Audacity » : la zone de bruit sélectionnée est préfixée
+     au fichier, afftdn la mesure comme profil (sample_noise), l'applique à tout
+     le fichier, puis le préfixe est coupé — la durée d'origine est conservée. */
+  function profileCore(sel, reduction, inNoise, inFull, out) {
+    const L = sel.end - sel.start;
+    return `[${inNoise}]atrim=start=${sel.start.toFixed(3)}:end=${sel.end.toFixed(3)},asetpts=PTS-STARTPTS[np];` +
+           `[${inFull}]asetpts=PTS-STARTPTS[fl];` +
+           `[np][fl]concat=n=2:v=0:a=1,` +
+           `asendcmd=c=0 afftdn@nz sample_noise start,` +
+           `asendcmd=c=${Math.max(0.01, L - 0.05).toFixed(3)} afftdn@nz sample_noise stop,` +
+           `afftdn@nz=nr=${reduction}:nf=-30,` +
+           `atrim=start=${L.toFixed(3)},asetpts=PTS-STARTPTS[${out}]`;
+  }
+
   /* Chaîne avant normalisation : débruitage + mélange dry/wet + gain. */
-  function buildPreChain(settings) {
+  function buildPreChain(settings, entry) {
     const w = settings.skipDenoise ? 0 : settings.intensity / 100;
-    let graph, head;
-    if (w >= 1) {
+    let graph;
+    if (settings.preset === "profil" && !settings.skipDenoise && w > 0) {
+      const sel = entry._sel;
+      if (w >= 1) {
+        graph = `[0:a]asplit=2[np0][fl0];` + profileCore(sel, settings.reduction, "np0", "fl0", "dn");
+      } else {
+        const dry = (1 - w).toFixed(3), wet = w.toFixed(3);
+        graph = `[0:a]asplit=3[cd0][np0][fl0];[cd0]volume=${dry}[cd];` +
+                profileCore(sel, settings.reduction, "np0", "fl0", "w0") +
+                `;[w0]volume=${wet}[cw];[cd][cw]amix=inputs=2:duration=first:normalize=0[dn]`;
+      }
+    } else if (w >= 1) {
       graph = `[0:a]${denoiseFilter(settings.preset)}[dn]`;
     } else if (w <= 0) {
       graph = `[0:a]anull[dn]`;
@@ -441,6 +478,17 @@ if (location.hash === "#nettoyage") selectTab(1);
     const post = [];
     if (settings.gain !== 0) post.push(`volume=${settings.gain}dB`);
     return { graph, post };
+  }
+
+  /* Borne la zone de bruit aux limites réelles du fichier. */
+  function clampNoiseSel(sel, duration) {
+    const dur = isFinite(duration) && duration > 0 ? duration : 3600;
+    let start = sel ? sel.start : 0;
+    let end = sel ? sel.end : 0.75;
+    start = Math.max(0, Math.min(start, dur - 0.15));
+    end = Math.max(start + 0.1, Math.min(end, dur - 0.02));
+    if (end - start > dur * 0.9) end = start + dur * 0.9;
+    return { start, end };
   }
 
   /* Filtres de fin de chaîne : retour à la fréquence d'origine, limiteur, mesure, trim. */
@@ -527,7 +575,12 @@ if (location.hash === "#nettoyage") selectTab(1);
       const meta = await probeInput(ff, inName);
       if (!meta.hasAudio) throw new Error("Aucune piste audio détectée dans ce fichier.");
 
-      const pre = buildPreChain(settings);
+      entry.lufsTarget = null;
+      entry.peakAfter = null;
+      if (settings.preset === "profil" && !settings.skipDenoise) {
+        entry._sel = clampNoiseSel(entry.noiseSel, meta.duration);
+      }
+      const pre = buildPreChain(settings, entry);
       const preStr = pre.post.length ? "," + pre.post.join(",") : "";
       const tail = tailFilters(settings, meta.rate).join(",");
       let normStr = "";
@@ -586,7 +639,7 @@ if (location.hash === "#nettoyage") selectTab(1);
       entry.li.querySelector(".levels").textContent = levels.join(" · ");
 
       setupABPlayer(entry);
-      drawWaveforms(entry); // asynchrone, non bloquant
+      analyzeClean(entry); // asynchrone : superpose la forme d'onde nettoyée
       return true;
     } finally {
       progressBar.classList.remove("active", "indeterminate");
@@ -605,6 +658,7 @@ if (location.hash === "#nettoyage") selectTab(1);
 
     const settings = {
       preset: presetSel.value,
+      reduction: +reductionInput.value,
       intensity: +intensityInput.value,
       gain: +gainInput.value,
       norm: normSel.value,
@@ -765,19 +819,27 @@ if (location.hash === "#nettoyage") selectTab(1);
     updateTime();
   }
 
-  /* ---------- Formes d'onde avant/après ---------- */
+  /* ---------- Formes d'onde, zone de bruit et sélection ---------- */
 
   const WAVE_MAX_BYTES = 80 * 1024 * 1024;
+  const BUCKETS = 400;
 
-  function computePeaks(buffer, buckets) {
-    const ch = buffer.getChannelData(0);
-    const per = Math.max(1, Math.floor(ch.length / buckets));
+  const fmtSec = v => v.toFixed(2).replace(".", ",") + " s";
+
+  async function decodeBlob(blob) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+    return buf;
+  }
+
+  function computePeaks(channel, buckets) {
+    const per = Math.max(1, Math.floor(channel.length / buckets));
     const peaks = new Float32Array(buckets);
     for (let b = 0; b < buckets; b++) {
       let max = 0;
-      const start = b * per, end = Math.min(ch.length, start + per);
+      const start = b * per, end = Math.min(channel.length, start + per);
       for (let i = start; i < end; i += 4) {
-        const v = Math.abs(ch[i]);
+        const v = Math.abs(channel[i]);
         if (v > max) max = v;
       }
       peaks[b] = max;
@@ -785,52 +847,157 @@ if (location.hash === "#nettoyage") selectTab(1);
     return peaks;
   }
 
-  async function drawWaveforms(entry) {
-    if (entry.file.size > WAVE_MAX_BYTES || entry.cleanBlob.size > WAVE_MAX_BYTES) return;
-    const canvas = entry.li.querySelector("canvas.wave");
+  /* Fenêtre la plus silencieuse du fichier : proposée comme zone de bruit. */
+  function autoDetectNoise(channel, rate, duration) {
+    const win = Math.min(1, Math.max(0.3, duration * 0.1));
+    const winN = Math.floor(win * rate);
+    const stepN = Math.max(1, Math.floor(0.05 * rate));
+    const dec = 8; // sous-échantillonnage pour la vitesse
+    let best = Infinity, bestI = 0;
+    for (let start = 0; start + winN <= channel.length; start += stepN) {
+      let sum = 0, n = 0;
+      for (let i = start; i < start + winN; i += dec) { const v = channel[i]; sum += v * v; n++; }
+      const e = sum / Math.max(1, n);
+      if (e < best) { best = e; bestI = start; }
+    }
+    return { start: bestI / rate, end: bestI / rate + win, auto: true };
+  }
+
+  /* Décode le fichier dès son ajout : forme d'onde + zone de bruit proposée. */
+  async function analyzeEntry(entry) {
+    if (entry.file.size > WAVE_MAX_BYTES) {
+      entry.decodeFailed = true;
+      entry.noiseSel = { start: 0, end: 0.75, auto: true, fallback: true };
+      updateNoiseHint(entry);
+      return;
+    }
     try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const [bufA, bufB] = await Promise.all([
-        entry.file.arrayBuffer().then(b => audioCtx.decodeAudioData(b)),
-        entry.cleanBlob.arrayBuffer().then(b => audioCtx.decodeAudioData(b)),
-      ]);
-      const css = getComputedStyle(document.documentElement);
-      const dpr = window.devicePixelRatio || 1;
-      canvas.hidden = false;
-      const W = canvas.clientWidth || 600, H = 52;
-      canvas.width = W * dpr; canvas.height = H * dpr;
-      const ctx = canvas.getContext("2d");
-      ctx.scale(dpr, dpr);
-      const buckets = Math.max(100, Math.floor(W / 2));
-      const before = computePeaks(bufA, buckets);
-      const after = computePeaks(bufB, buckets);
-      let peakB = 0; for (const v of before) if (v > peakB) peakB = v;
-      entry.peakBefore = peakB > 0 ? 20 * Math.log10(peakB) : null;
-      const mid = H / 2;
-      const drawSeries = (peaks, color, alpha) => {
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = color;
-        const bw = W / peaks.length;
-        for (let i = 0; i < peaks.length; i++) {
-          const h = Math.max(1, peaks[i] * (H - 4));
-          ctx.fillRect(i * bw, mid - h / 2, Math.max(1, bw - 0.5), h);
-        }
-        ctx.globalAlpha = 1;
-      };
-      drawSeries(before, css.getPropertyValue("--wave-before").trim() || "#4a5178", 0.9);
-      drawSeries(after, css.getPropertyValue("--wave-after").trim() || "#8b96ff", 0.85);
-      // met à jour la ligne de niveaux avec la crête d'entrée maintenant connue
-      if (entry.peakBefore !== null) {
-        const levels = entry.li.querySelector(".levels");
-        if (levels.textContent && !levels.textContent.includes("Crête avant")) {
-          levels.textContent = `Crête avant : ${entry.peakBefore.toFixed(1)} dB · ` + levels.textContent;
-        }
-      }
+      const buf = await decodeBlob(entry.file);
+      const ch = buf.getChannelData(0);
+      entry.duration = buf.duration;
+      entry.peaksBefore = computePeaks(ch, BUCKETS);
+      let peak = 0; for (const v of entry.peaksBefore) if (v > peak) peak = v;
+      entry.peakBefore = peak > 0 ? 20 * Math.log10(peak) : null;
+      entry.noiseSel = autoDetectNoise(ch, buf.sampleRate, buf.duration);
     } catch (err) {
-      console.warn("Forme d'onde indisponible pour", entry.file.name, err);
-      canvas.hidden = true;
+      console.warn("Décodage impossible pour", entry.file.name, err);
+      entry.decodeFailed = true;
+      entry.noiseSel = { start: 0, end: 0.75, auto: true, fallback: true };
+    }
+    drawWave(entry);
+    updateNoiseHint(entry);
+  }
+
+  /* Après nettoyage : superpose la forme d'onde de la version nettoyée. */
+  async function analyzeClean(entry) {
+    if (!entry.cleanBlob || entry.cleanBlob.size > WAVE_MAX_BYTES) return;
+    try {
+      const buf = await decodeBlob(entry.cleanBlob);
+      entry.peaksAfter = computePeaks(buf.getChannelData(0), BUCKETS);
+      drawWave(entry);
+    } catch (err) {
+      console.warn("Forme d'onde nettoyée indisponible pour", entry.file.name, err);
     }
   }
+
+  function drawWave(entry) {
+    const canvas = entry.li.querySelector("canvas.wave");
+    if (!entry.peaksBefore) { canvas.hidden = true; return; }
+    const selectable = presetSel.value === "profil";
+    canvas.hidden = false;
+    canvas.classList.toggle("selectable", selectable && !processing);
+    const css = getComputedStyle(document.documentElement);
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.clientWidth || 600, H = 52;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const mid = H / 2;
+    const drawSeries = (peaks, color, alpha) => {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      const bw = W / peaks.length;
+      for (let i = 0; i < peaks.length; i++) {
+        const h = Math.max(1, peaks[i] * (H - 4));
+        ctx.fillRect(i * bw, mid - h / 2, Math.max(1, bw - 0.5), h);
+      }
+      ctx.globalAlpha = 1;
+    };
+    drawSeries(entry.peaksBefore, css.getPropertyValue("--wave-before").trim() || "#4a5178", 0.9);
+    if (entry.peaksAfter) drawSeries(entry.peaksAfter, css.getPropertyValue("--wave-after").trim() || "#8b96ff", 0.85);
+    // surbrillance de la zone de bruit sélectionnée (mode profil uniquement)
+    if (selectable && entry.noiseSel && entry.duration && !entry.noiseSel.fallback) {
+      const accent = css.getPropertyValue("--accent").trim() || "#6c7bff";
+      const x1 = (entry.noiseSel.start / entry.duration) * W;
+      const x2 = (entry.noiseSel.end / entry.duration) * W;
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = accent;
+      ctx.fillRect(x1, 0, Math.max(2, x2 - x1), H);
+      ctx.globalAlpha = 0.9;
+      ctx.fillRect(x1, 0, 1.5, H);
+      ctx.fillRect(x2 - 1.5, 0, 1.5, H);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function updateNoiseHint(entry) {
+    const hint = entry.li.querySelector(".noise-hint");
+    if (presetSel.value !== "profil") { hint.hidden = true; return; }
+    hint.hidden = false;
+    if (!entry.noiseSel) {
+      hint.textContent = "Analyse de la forme d'onde…";
+    } else if (entry.noiseSel.fallback) {
+      hint.textContent = "Aperçu indisponible pour ce fichier : les 0,75 premières secondes serviront de profil de bruit.";
+    } else {
+      hint.textContent = `Zone de bruit analysée : ${fmtSec(entry.noiseSel.start)} → ${fmtSec(entry.noiseSel.end)}` +
+        (entry.noiseSel.auto ? " (détectée automatiquement — glissez sur la forme d'onde pour l'ajuster)" : "");
+    }
+  }
+
+  /* Sélection de la zone de bruit à la souris / au doigt sur la forme d'onde. */
+  function attachWaveSelection(entry) {
+    const canvas = entry.li.querySelector("canvas.wave");
+    let dragStart = null;
+    const frac = e => {
+      const r = canvas.getBoundingClientRect();
+      return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    };
+    canvas.addEventListener("pointerdown", e => {
+      if (presetSel.value !== "profil" || processing || !entry.duration || entry.decodeFailed) return;
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      dragStart = frac(e) * entry.duration;
+      entry.noiseSel = { start: dragStart, end: dragStart, auto: false };
+      drawWave(entry);
+    });
+    canvas.addEventListener("pointermove", e => {
+      if (dragStart === null) return;
+      const t = frac(e) * entry.duration;
+      entry.noiseSel = { start: Math.min(dragStart, t), end: Math.max(dragStart, t), auto: false };
+      drawWave(entry);
+      updateNoiseHint(entry);
+    });
+    canvas.addEventListener("pointerup", e => {
+      if (dragStart === null) return;
+      const t = frac(e) * entry.duration;
+      let start = Math.min(dragStart, t), end = Math.max(dragStart, t);
+      dragStart = null;
+      if (end - start < 0.1) { // simple clic : fenêtre de 0,5 s centrée
+        start = Math.max(0, (start + end) / 2 - 0.25);
+        end = Math.min(entry.duration, start + 0.5);
+      }
+      entry.noiseSel = { start, end, auto: false };
+      drawWave(entry);
+      updateNoiseHint(entry);
+    });
+  }
+
+  /* Rafraîchit surbrillances et indications quand le préréglage change. */
+  function refreshNoiseUI() {
+    reductionWrap.style.display = presetSel.value === "profil" ? "" : "none";
+    queue.forEach(e => { drawWave(e); updateNoiseHint(e); });
+  }
+  refreshNoiseUI();
 
   /* ---------- Écouteurs ---------- */
 
