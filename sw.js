@@ -1,5 +1,5 @@
 /* Cache hors-ligne : après un premier chargement, l'application fonctionne sans connexion. */
-const CACHE = "studio-audio-v2";
+const CACHE = "studio-audio-v3";
 const ASSETS = [
   "./",
   "index.html",

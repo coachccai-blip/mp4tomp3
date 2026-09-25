@@ -21,7 +21,10 @@ Ouvrez l'application (GitHub Pages, ou en local — voir « Développement local
 
 1. Glissez-déposez jusqu'à 30 fichiers audio (WAV, MP3, M4A/AAC, OGG, FLAC, WebM… les MP4 sont acceptés : seul l'audio est traité).
 2. Réglez :
-   - **Préréglage de débruitage** : Léger / Standard / Fort (moteur FFT `afftdn`) ou **Isolation voix** (réseau de neurones RNNoise) ;
+   - **Préréglage de débruitage** :
+     - **Profil de bruit (méthode Audacity, par défaut)** : la forme d'onde s'affiche dès le dépôt du fichier, avec une zone de bruit détectée automatiquement (la fenêtre la plus silencieuse). Glissez sur la forme d'onde pour sélectionner vous-même une portion contenant *uniquement* du bruit ; ce profil spectral est ensuite soustrait à tout le fichier. Le curseur **Réduction de bruit (3–48 dB)** correspond au réglage « Noise reduction » d'Audacity.
+     - Léger / Standard / Fort : débruitage FFT « à l'aveugle » (`afftdn` adaptatif), sans profil ;
+     - **Isolation voix** (réseau de neurones RNNoise) ;
    - **Intensité** : mélange entre l'original (« dry ») et le signal traité (« wet »), pour éviter l'effet « voix robotique » à 100 % ;
    - **Gain** (−12 → +24 dB) ;
    - **Normalisation** : crête −1 dB, ou sonie −16 LUFS (podcast) / −14 LUFS (YouTube/Spotify), mesurée selon ITU-R BS.1770 (deux passes, filtre K-weighting via `loudnorm`) ;
@@ -44,11 +47,14 @@ décodage (ffmpeg) → débruitage (afftdn ou RNNoise à 48 kHz) → mélange dr
 → encodage WAV 16/24 bits ou MP3
 ```
 
-Résultats mesurés sur les fichiers de test (vérifiés avec `ffmpeg -af ebur128` natif) :
+En mode « Profil de bruit », la zone sélectionnée est préfixée au fichier, mesurée par `afftdn` (commande `sample_noise`, l'équivalent FFmpeg du « Get noise profile » d'Audacity), appliquée à tout le fichier, puis le préfixe est coupé : la durée de sortie est identique à l'entrée.
 
+Résultats mesurés sur les fichiers de test (vérifiés avec un ffmpeg natif indépendant) :
+
+- profil de bruit, réduction 18 dB → plancher de bruit abaissé de **17,9 dB**, signal utile inchangé (±0,05 dB), durée préservée à l'échantillon près ;
 - normalisation −16 LUFS → sortie mesurée à **−15,8 LUFS** (tolérance du cahier des charges : ±0,5) ;
 - normalisation crête −1 dB → crête mesurée à **−1,0 dB**, aucun écrêtage ;
-- préréglage Standard à 85 % d'intensité → plancher de bruit abaissé de ~6 dB avec signal utile préservé (les préréglages Fort et Isolation voix réduisent davantage).
+- préréglage Standard (aveugle) à 85 % d'intensité → plancher de bruit abaissé de ~6 dB.
 
 ## Moteurs et licences
 
