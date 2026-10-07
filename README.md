@@ -22,7 +22,7 @@ Ouvrez l'application (GitHub Pages, ou en local — voir « Développement local
 1. Glissez-déposez jusqu'à 30 fichiers audio (WAV, MP3, M4A/AAC, OGG, FLAC, WebM… les MP4 sont acceptés : seul l'audio est traité).
 2. Réglez :
    - **Préréglage de débruitage** :
-     - **Profil de bruit (méthode Audacity, par défaut)** : la forme d'onde s'affiche dès le dépôt du fichier, avec une zone de bruit détectée automatiquement (la fenêtre la plus silencieuse). Glissez sur la forme d'onde pour sélectionner vous-même une portion contenant *uniquement* du bruit ; ce profil spectral est ensuite soustrait à tout le fichier. Le curseur **Réduction de bruit (3–48 dB)** correspond au réglage « Noise reduction » d'Audacity.
+     - **Profil de bruit (méthode Audacity, par défaut)** : la forme d'onde s'affiche dès le dépôt du fichier, avec une zone de bruit détectée automatiquement (la fenêtre la plus silencieuse). Pour repérer le bruit : **écoutez l'original** (bouton ▶, tête de lecture verte sur la forme d'onde), **zoomez/dézoomez** (boutons ＋/−/Tout, molette centrée sur le curseur, barre de défilement quand on est zoomé), puis glissez sur la forme d'onde pour sélectionner une portion contenant *uniquement* du bruit — le bouton **« ▶ sélection »** permet de vérifier à l'oreille. Ce profil spectral est ensuite soustrait à tout le fichier. Le curseur **Réduction de bruit (3–48 dB)** correspond au réglage « Noise reduction » d'Audacity.
      - Léger / Standard / Fort : débruitage FFT « à l'aveugle » (`afftdn` adaptatif), sans profil ;
      - **Isolation voix** (réseau de neurones RNNoise) ;
    - **Intensité** : mélange entre l'original (« dry ») et le signal traité (« wet »), pour éviter l'effet « voix robotique » à 100 % ;
