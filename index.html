@@ -213,6 +213,17 @@
   }
   canvas.wave.selectable { cursor: crosshair; touch-action: none; }
   .noise-hint { grid-column: 1 / -1; color: var(--accent); }
+  .wave-controls {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    flex-wrap: wrap;
+  }
+  .wave-controls button { padding: .3rem .65rem; font-size: .82rem; }
+  .wave-controls .wpan { flex: 1; min-width: 90px; accent-color: var(--accent); }
+  .wave-controls .wtime { color: var(--muted); font-size: .8rem; min-width: 6.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .wave-controls .wzoom-level { color: var(--muted); font-size: .8rem; }
   .ab-player {
     grid-column: 1 / -1;
     display: flex;

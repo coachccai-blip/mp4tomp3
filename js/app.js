@@ -361,6 +361,8 @@ if (location.hash === "#nettoyage") selectTab(1);
 
   function releaseEntry(entry) {
     if (entry.player) entry.player.destroy();
+    if (entry.previewPlaying) stopPreview(entry);
+    if (entry.origAudio) { entry.origAudio.src = ""; entry.origAudio = null; }
     if (entry.origUrl) URL.revokeObjectURL(entry.origUrl);
     if (entry.cleanUrl) URL.revokeObjectURL(entry.cleanUrl);
   }
@@ -387,6 +389,16 @@ if (location.hash === "#nettoyage") selectTab(1);
         <div class="file-meta">${humanSize(file.size)}</div>
         <div class="progress"><div></div></div>
         <canvas class="wave" hidden aria-label="Forme d'onde avant/après"></canvas>
+        <div class="wave-controls" hidden>
+          <button class="btn-ghost worig-btn" aria-label="Écouter l'original">▶</button>
+          <button class="btn-ghost wsel-btn" title="Écouter uniquement la zone sélectionnée">▶ sélection</button>
+          <button class="btn-ghost wz-out" aria-label="Dézoomer" title="Dézoomer">−</button>
+          <button class="btn-ghost wz-in" aria-label="Zoomer" title="Zoomer">＋</button>
+          <button class="btn-ghost wz-fit" title="Afficher tout le fichier">Tout</button>
+          <span class="wzoom-level" hidden></span>
+          <input type="range" class="wpan" value="0" min="0" max="0" step="any" hidden aria-label="Défilement de la vue">
+          <span class="wtime">0:00 / 0:00</span>
+        </div>
         <div class="noise-hint file-meta" hidden></div>
         <div class="ab-player" hidden>
           <button class="btn-ghost play-btn" aria-label="Lecture / pause">▶</button>
@@ -400,6 +412,8 @@ if (location.hash === "#nettoyage") selectTab(1);
         origUrl: null, cleanUrl: null, peakBefore: null,
         peaksBefore: null, peaksAfter: null, duration: null,
         noiseSel: null, decodeFailed: false,
+        view: null, origAudio: null, previewCtl: null, previewPlaying: false,
+        previewUntil: null, playhead: null, waveRaf: null,
       };
       li.querySelector(".rm-btn").addEventListener("click", () => {
         if (processing) return;
@@ -724,9 +738,9 @@ if (location.hash === "#nettoyage") selectTab(1);
 
   function setupABPlayer(entry) {
     if (entry.player) entry.player.destroy();
-    if (entry.origUrl) URL.revokeObjectURL(entry.origUrl);
+    if (entry.previewPlaying) stopPreview(entry);
     if (entry.cleanUrl) URL.revokeObjectURL(entry.cleanUrl);
-    entry.origUrl = URL.createObjectURL(entry.file);
+    if (!entry.origUrl) entry.origUrl = URL.createObjectURL(entry.file);
     entry.cleanUrl = URL.createObjectURL(entry.cleanBlob);
 
     const wrap = entry.li.querySelector(".ab-player");
@@ -822,9 +836,34 @@ if (location.hash === "#nettoyage") selectTab(1);
   /* ---------- Formes d'onde, zone de bruit et sélection ---------- */
 
   const WAVE_MAX_BYTES = 80 * 1024 * 1024;
-  const BUCKETS = 400;
+  const PEAKS_PER_SEC = 200;   // résolution d'analyse de la forme d'onde (5 ms)
+  const MIN_VIEW_SPAN = 0.05;  // zoom maximal : fenêtre de 50 ms
 
   const fmtSec = v => v.toFixed(2).replace(".", ",") + " s";
+
+  function peakBuckets(duration) {
+    return Math.min(1000000, Math.max(2000, Math.ceil((duration || 10) * PEAKS_PER_SEC)));
+  }
+
+  /* Fenêtre visible de la forme d'onde ; entry.view === null → fichier entier. */
+  function getView(entry) {
+    if (!entry.duration) return { start: 0, end: 1 };
+    return entry.view || { start: 0, end: entry.duration };
+  }
+  function setView(entry, start, span) {
+    const dur = entry.duration;
+    if (!dur) return;
+    span = Math.max(MIN_VIEW_SPAN, Math.min(span, dur));
+    start = Math.max(0, Math.min(start, dur - span));
+    entry.view = span >= dur - 1e-9 ? null : { start, end: start + span };
+    updateWaveControls(entry);
+    drawWave(entry);
+  }
+  function zoomAt(entry, anchorT, factor) {
+    const v = getView(entry);
+    const span = v.end - v.start;
+    setView(entry, anchorT - (anchorT - v.start) / factor, span / factor);
+  }
 
   async function decodeBlob(blob) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -875,7 +914,7 @@ if (location.hash === "#nettoyage") selectTab(1);
       const buf = await decodeBlob(entry.file);
       const ch = buf.getChannelData(0);
       entry.duration = buf.duration;
-      entry.peaksBefore = computePeaks(ch, BUCKETS);
+      entry.peaksBefore = computePeaks(ch, peakBuckets(buf.duration));
       let peak = 0; for (const v of entry.peaksBefore) if (v > peak) peak = v;
       entry.peakBefore = peak > 0 ? 20 * Math.log10(peak) : null;
       entry.noiseSel = autoDetectNoise(ch, buf.sampleRate, buf.duration);
@@ -885,6 +924,7 @@ if (location.hash === "#nettoyage") selectTab(1);
       entry.noiseSel = { start: 0, end: 0.75, auto: true, fallback: true };
     }
     drawWave(entry);
+    updateWaveControls(entry);
     updateNoiseHint(entry);
   }
 
@@ -893,7 +933,8 @@ if (location.hash === "#nettoyage") selectTab(1);
     if (!entry.cleanBlob || entry.cleanBlob.size > WAVE_MAX_BYTES) return;
     try {
       const buf = await decodeBlob(entry.cleanBlob);
-      entry.peaksAfter = computePeaks(buf.getChannelData(0), BUCKETS);
+      const n = entry.peaksBefore ? entry.peaksBefore.length : peakBuckets(buf.duration);
+      entry.peaksAfter = computePeaks(buf.getChannelData(0), n);
       drawWave(entry);
     } catch (err) {
       console.warn("Forme d'onde nettoyée indisponible pour", entry.file.name, err);
@@ -913,13 +954,23 @@ if (location.hash === "#nettoyage") selectTab(1);
     const ctx = canvas.getContext("2d");
     ctx.scale(dpr, dpr);
     const mid = H / 2;
+    const dur = entry.duration || 1;
+    const v = getView(entry);
+    const span = v.end - v.start;
+    const timeToX = t => ((t - v.start) / span) * W;
+    // rendu de la fenêtre visible à partir des pics haute résolution
     const drawSeries = (peaks, color, alpha) => {
       ctx.globalAlpha = alpha;
       ctx.fillStyle = color;
-      const bw = W / peaks.length;
-      for (let i = 0; i < peaks.length; i++) {
-        const h = Math.max(1, peaks[i] * (H - 4));
-        ctx.fillRect(i * bw, mid - h / 2, Math.max(1, bw - 0.5), h);
+      const N = peaks.length;
+      for (let x = 0; x < W; x++) {
+        const tA = v.start + (x / W) * span;
+        const i0 = Math.max(0, Math.floor((tA / dur) * N));
+        const i1 = Math.min(N, Math.max(i0 + 1, Math.ceil(((tA + span / W) / dur) * N)));
+        let m = 0;
+        for (let i = i0; i < i1; i++) if (peaks[i] > m) m = peaks[i];
+        const h = Math.max(1, m * (H - 4));
+        ctx.fillRect(x, mid - h / 2, 1, h);
       }
       ctx.globalAlpha = 1;
     };
@@ -928,15 +979,22 @@ if (location.hash === "#nettoyage") selectTab(1);
     // surbrillance de la zone de bruit sélectionnée (mode profil uniquement)
     if (selectable && entry.noiseSel && entry.duration && !entry.noiseSel.fallback) {
       const accent = css.getPropertyValue("--accent").trim() || "#6c7bff";
-      const x1 = (entry.noiseSel.start / entry.duration) * W;
-      const x2 = (entry.noiseSel.end / entry.duration) * W;
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = accent;
-      ctx.fillRect(x1, 0, Math.max(2, x2 - x1), H);
-      ctx.globalAlpha = 0.9;
-      ctx.fillRect(x1, 0, 1.5, H);
-      ctx.fillRect(x2 - 1.5, 0, 1.5, H);
-      ctx.globalAlpha = 1;
+      const x1 = Math.max(-2, timeToX(entry.noiseSel.start));
+      const x2 = Math.min(W + 2, timeToX(entry.noiseSel.end));
+      if (x2 > 0 && x1 < W) {
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = accent;
+        ctx.fillRect(x1, 0, Math.max(2, x2 - x1), H);
+        ctx.globalAlpha = 0.9;
+        ctx.fillRect(x1, 0, 1.5, H);
+        ctx.fillRect(x2 - 1.5, 0, 1.5, H);
+        ctx.globalAlpha = 1;
+      }
+    }
+    // tête de lecture
+    if (entry.playhead != null && entry.playhead >= v.start && entry.playhead <= v.end) {
+      ctx.fillStyle = css.getPropertyValue("--accent-2").trim() || "#22c55e";
+      ctx.fillRect(timeToX(entry.playhead) - 0.75, 0, 1.5, H);
     }
   }
 
@@ -950,52 +1008,177 @@ if (location.hash === "#nettoyage") selectTab(1);
       hint.textContent = "Aperçu indisponible pour ce fichier : les 0,75 premières secondes serviront de profil de bruit.";
     } else {
       hint.textContent = `Zone de bruit analysée : ${fmtSec(entry.noiseSel.start)} → ${fmtSec(entry.noiseSel.end)}` +
-        (entry.noiseSel.auto ? " (détectée automatiquement — glissez sur la forme d'onde pour l'ajuster)" : "");
+        (entry.noiseSel.auto
+          ? " (détectée automatiquement — écoutez, zoomez avec ＋/− ou la molette, puis glissez sur la forme d'onde pour l'ajuster)"
+          : "");
     }
   }
 
-  /* Sélection de la zone de bruit à la souris / au doigt sur la forme d'onde. */
+  /* ---------- Écoute de l'original (avant traitement) ---------- */
+
+  function ensurePreview(entry) {
+    if (!entry.origUrl) entry.origUrl = URL.createObjectURL(entry.file);
+    if (!entry.origAudio) {
+      const a = new Audio(entry.origUrl);
+      a.preload = "auto";
+      a.addEventListener("ended", () => stopPreview(entry));
+      a.addEventListener("error", () => {
+        stopPreview(entry);
+        const btn = entry.li.querySelector(".worig-btn");
+        const selBtn = entry.li.querySelector(".wsel-btn");
+        btn.disabled = selBtn.disabled = true;
+        btn.title = selBtn.title = "Lecture impossible pour ce format dans ce navigateur (la version nettoyée restera écoutable).";
+      });
+      entry.origAudio = a;
+      entry.previewCtl = { pause: () => stopPreview(entry) };
+    }
+    return entry.origAudio;
+  }
+
+  function startPreview(entry, from, until) {
+    const a = ensurePreview(entry);
+    if (currentPlayer && currentPlayer !== entry.previewCtl) currentPlayer.pause();
+    currentPlayer = entry.previewCtl;
+    if (from != null) { try { a.currentTime = from; } catch (_) {} }
+    entry.previewUntil = until != null ? until : null;
+    a.play().catch(() => {});
+    entry.previewPlaying = true;
+    entry.li.querySelector(".worig-btn").textContent = "⏸";
+    const tick = () => {
+      if (!entry.previewPlaying) return;
+      entry.playhead = a.currentTime;
+      if (entry.previewUntil != null && a.currentTime >= entry.previewUntil) { stopPreview(entry); return; }
+      // suit la lecture quand on est zoomé
+      const v = getView(entry);
+      if (entry.view && entry.playhead > v.end) {
+        setView(entry, entry.playhead - (v.end - v.start) * 0.1, v.end - v.start);
+      } else {
+        drawWave(entry);
+      }
+      updateWaveControls(entry);
+      entry.waveRaf = requestAnimationFrame(tick);
+    };
+    if (entry.waveRaf) cancelAnimationFrame(entry.waveRaf);
+    entry.waveRaf = requestAnimationFrame(tick);
+  }
+
+  function stopPreview(entry) {
+    if (entry.origAudio) entry.origAudio.pause();
+    entry.previewPlaying = false;
+    entry.previewUntil = null;
+    if (entry.waveRaf) { cancelAnimationFrame(entry.waveRaf); entry.waveRaf = null; }
+    if (currentPlayer === entry.previewCtl) currentPlayer = null;
+    const btn = entry.li.querySelector(".worig-btn");
+    if (btn) btn.textContent = "▶";
+    drawWave(entry);
+    updateWaveControls(entry);
+  }
+
+  /* Barre de contrôles sous la forme d'onde : lecture, zoom, défilement. */
+  function updateWaveControls(entry) {
+    const wrap = entry.li.querySelector(".wave-controls");
+    if (!entry.peaksBefore) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    const v = getView(entry);
+    const span = v.end - v.start;
+    const pan = wrap.querySelector(".wpan");
+    const zoomLevel = wrap.querySelector(".wzoom-level");
+    const zoomed = !!entry.view;
+    pan.hidden = !zoomed;
+    zoomLevel.hidden = !zoomed;
+    if (zoomed) {
+      pan.max = entry.duration - span;
+      pan.step = span / 10;
+      if (Math.abs(+pan.value - v.start) > span / 20) pan.value = v.start;
+      zoomLevel.textContent = "×" + Math.max(1, Math.round(entry.duration / span));
+    }
+    const pos = entry.playhead != null ? entry.playhead : 0;
+    wrap.querySelector(".wtime").textContent = `${fmtTime(pos)} / ${fmtTime(entry.duration || 0)}`;
+    wrap.querySelector(".wsel-btn").style.display =
+      presetSel.value === "profil" && entry.noiseSel && !entry.noiseSel.fallback ? "" : "none";
+  }
+
+  /* Sélection de la zone de bruit, zoom à la molette et boutons, sur la forme d'onde. */
   function attachWaveSelection(entry) {
     const canvas = entry.li.querySelector("canvas.wave");
+    const wrap = entry.li.querySelector(".wave-controls");
     let dragStart = null;
-    const frac = e => {
+    const timeAt = e => {
       const r = canvas.getBoundingClientRect();
-      return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      const v = getView(entry);
+      return v.start + f * (v.end - v.start);
     };
     canvas.addEventListener("pointerdown", e => {
       if (presetSel.value !== "profil" || processing || !entry.duration || entry.decodeFailed) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      dragStart = frac(e) * entry.duration;
+      dragStart = timeAt(e);
       entry.noiseSel = { start: dragStart, end: dragStart, auto: false };
       drawWave(entry);
     });
     canvas.addEventListener("pointermove", e => {
       if (dragStart === null) return;
-      const t = frac(e) * entry.duration;
+      const t = timeAt(e);
       entry.noiseSel = { start: Math.min(dragStart, t), end: Math.max(dragStart, t), auto: false };
       drawWave(entry);
       updateNoiseHint(entry);
     });
     canvas.addEventListener("pointerup", e => {
       if (dragStart === null) return;
-      const t = frac(e) * entry.duration;
+      const t = timeAt(e);
       let start = Math.min(dragStart, t), end = Math.max(dragStart, t);
       dragStart = null;
-      if (end - start < 0.1) { // simple clic : fenêtre de 0,5 s centrée
+      if (end - start < 0.02) { // simple clic : fenêtre de 0,5 s centrée
         start = Math.max(0, (start + end) / 2 - 0.25);
         end = Math.min(entry.duration, start + 0.5);
       }
       entry.noiseSel = { start, end, auto: false };
       drawWave(entry);
       updateNoiseHint(entry);
+      updateWaveControls(entry);
+    });
+    // molette : zoom centré sur le curseur ; molette horizontale : défilement
+    canvas.addEventListener("wheel", e => {
+      if (!entry.duration || !entry.peaksBefore) return;
+      e.preventDefault();
+      const v = getView(entry);
+      const span = v.end - v.start;
+      if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+        zoomAt(entry, timeAt(e), e.deltaY < 0 ? 1.3 : 1 / 1.3);
+      } else {
+        setView(entry, v.start + e.deltaX * 0.002 * span, span);
+      }
+    }, { passive: false });
+    // boutons
+    wrap.querySelector(".worig-btn").addEventListener("click", () => {
+      if (entry.previewPlaying) stopPreview(entry);
+      else startPreview(entry, entry.playhead != null && entry.playhead < entry.duration - 0.1 ? entry.playhead : 0);
+    });
+    wrap.querySelector(".wsel-btn").addEventListener("click", () => {
+      if (entry.noiseSel && !entry.noiseSel.fallback) startPreview(entry, entry.noiseSel.start, entry.noiseSel.end);
+    });
+    const anchor = () => {
+      const v = getView(entry);
+      if (presetSel.value === "profil" && entry.noiseSel && !entry.noiseSel.fallback) {
+        const c = (entry.noiseSel.start + entry.noiseSel.end) / 2;
+        if (c >= v.start && c <= v.end) return c;
+      }
+      return (v.start + v.end) / 2;
+    };
+    wrap.querySelector(".wz-in").addEventListener("click", () => zoomAt(entry, anchor(), 2));
+    wrap.querySelector(".wz-out").addEventListener("click", () => zoomAt(entry, anchor(), 0.5));
+    wrap.querySelector(".wz-fit").addEventListener("click", () => setView(entry, 0, entry.duration || 1));
+    wrap.querySelector(".wpan").addEventListener("input", e => {
+      const v = getView(entry);
+      setView(entry, +e.target.value, v.end - v.start);
     });
   }
 
   /* Rafraîchit surbrillances et indications quand le préréglage change. */
   function refreshNoiseUI() {
     reductionWrap.style.display = presetSel.value === "profil" ? "" : "none";
-    queue.forEach(e => { drawWave(e); updateNoiseHint(e); });
+    queue.forEach(e => { drawWave(e); updateNoiseHint(e); updateWaveControls(e); });
   }
   refreshNoiseUI();
 
